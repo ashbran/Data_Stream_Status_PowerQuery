@@ -15,15 +15,15 @@ Outputs a clean, grouped table for reporting or dashboard use
 ├── CHANGELOG.md                     # Version history and updates
 └── README.md                        # Project documentation
 
-# Usage
+## Usage
 Open Power BI or Excel Power Query Editor
 Paste the contents of Apollo_MDM_TaskPipeline_v1.1.m into a new query
 Ensure the source table is named Table2 and includes all expected columns
 Refresh the query to generate the transformed output
 
-# Versioning
+## Versioning
 This project uses manual version control via GitHub. Each version of the M code is saved with a semantic version tag (e.g., v1.0, v1.1). See CHANGELOG.md for details.
 
-# Author
+## Author
 Ashley Brantner
 IT Manager, Master Data Management
