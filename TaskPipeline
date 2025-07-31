@@ -1,0 +1,136 @@
+let
+    // Load source table
+    Source = Excel.CurrentWorkbook(){[Name="Table2"]}[Content],
+
+    // Unpivot all task-related columns (exclude metadata)
+    Unpivoted = Table.UnpivotOtherColumns(Source, {
+        "Functional Area", "Object Group", "Entity", 
+        "Object Name#(lf)(Each will be a file)", "Sub-Object Name", 
+        "BPM", "IT Solution Manager", "Comments"
+    }, "Attribute", "Value"),
+
+    // Normalize attribute names for consistent matching
+    Normalized = Table.TransformColumns(Unpivoted, {
+        {"Attribute", each Text.Trim(Text.Lower(_)), type text}
+    }),
+
+    // Classify attribute type (e.g., Planned Start, Actual End)
+    AddAttributeType = Table.AddColumn(Normalized, "Attribute Type", each 
+        if Text.Contains([Attribute], "planned start") then "Planned Start"
+        else if Text.Contains([Attribute], "planned end") then "Planned End"
+        else if Text.Contains([Attribute], "expected start") then "Expected Start"
+        else if Text.Contains([Attribute], "expected end") then "Expected End"
+        else if Text.Contains([Attribute], "actual start") then "Actual Start"
+        else if Text.Contains([Attribute], "actual end") then "Actual End"
+        else if Text.Contains([Attribute], "status") then "Status"
+        else "Other"
+    ),
+
+    // Classify task based on attribute name
+    AddTask = Table.AddColumn(AddAttributeType, "Task", each 
+        if Text.Contains([Attribute], "scope file validation") then "Scope File Validation"
+        else if Text.Contains([Attribute], "upload file creation") then "Upload File Creation"
+        else if Text.Contains([Attribute], "upload file validation") then "Upload File Validation"
+        else if Text.Contains([Attribute], "quality gate") then "Quality Gate"
+        else if Text.Contains([Attribute], "data upload") then "Data Upload / Manual Create"
+        else if Text.Contains([Attribute], "post load") then "Post Load Validation"
+        else "Other"
+    ),
+
+    // Replace "N/A" with nulls
+    ReplaceNA = Table.ReplaceValue(AddTask, "N/A", null, Replacer.ReplaceValue, {"Value"}),
+
+    // Pivot to get one row per task with attribute types as columns
+    Pivoted = Table.Pivot(
+        ReplaceNA, 
+        List.Distinct(ReplaceNA[Attribute Type]), 
+        "Attribute Type", 
+        "Value", 
+        List.First
+    ),
+
+    // Convert date columns to proper types
+    ChangedTypes = Table.TransformColumnTypes(Pivoted, {
+        {"Planned Start", type date}, {"Planned End", type date},
+        {"Expected Start", type date}, {"Expected End", type date},
+        {"Actual Start", type date}, {"Actual End", type date}
+    }),
+
+    // Filter out rows that aren't valid tasks
+    FilteredTasks = Table.SelectRows(ChangedTypes, each [Task] <> "Other"),
+
+    // Merge back with source to get validator columns
+    Merged = Table.NestedJoin(FilteredTasks, {"Entity"}, Source, {"Entity"}, "Source", JoinKind.LeftOuter),
+    Expanded = Table.ExpandTableColumn(Merged, "Source", {
+        "Scope File Validation & Updates Responsible", 
+        "Upload File Validation Responsible", 
+        "Quality Gate Responsible", 
+        "Data Upload / Manual Create Responsible", 
+        "Post Load File Validation Responsible"
+    }),
+
+    // Assign Business Validator based on task
+    AddValidator = Table.AddColumn(Expanded, "Business Validator", each 
+        if [Task] = "Scope File Validation" then [#"Scope File Validation & Updates Responsible"]
+        else if [Task] = "Upload File Creation" then [#"Upload File Validation Responsible"]
+        else if [Task] = "Quality Gate" then [#"Quality Gate Responsible"]
+        else if [Task] = "Data Upload / Manual Create" then [#"Data Upload / Manual Create Responsible"]
+        else if [Task] = "Post Load Validation" then [#"Post Load File Validation Responsible"]
+        else null
+    ),
+
+    // Remove validator source columns
+    Cleaned = Table.RemoveColumns(AddValidator, {
+        "Scope File Validation & Updates Responsible", 
+        "Upload File Validation Responsible", 
+        "Quality Gate Responsible", 
+        "Data Upload / Manual Create Responsible", 
+        "Post Load File Validation Responsible"
+    }),
+
+    // Group by task to consolidate rows
+    Grouped = Table.Group(Cleaned, {
+        "Functional Area", "Object Group", "Entity", 
+        "Object Name#(lf)(Each will be a file)", "Sub-Object Name", "Task"
+    }, {
+        {"Planned Start", each List.Min([Planned Start]), type nullable date},
+        {"Planned End", each List.Max([Planned End]), type nullable date},
+        {"Expected Start", each List.Min([Expected Start]), type nullable date},
+        {"Expected End", each List.Max([Expected End]), type nullable date},
+        {"Actual Start", each List.Max([Actual Start]), type nullable date},
+        {"Actual End", each List.Max([Actual End]), type nullable date},
+        {"Status", each List.Max([Status]), type nullable text},
+        {"BPM", each List.First(List.RemoveNulls([BPM])), type text},
+        {"IT Solution Manager", each List.First(List.RemoveNulls([IT Solution Manager])), type text},
+        {"Business Validator", each List.First(List.RemoveNulls([Business Validator])), type text},
+        {"Comments", each List.First(List.RemoveNulls([Comments])), type text}
+    }),
+
+    // Add project delay status
+    AddProjectDelay = Table.AddColumn(Grouped, "Project Delay Status", each 
+        if [Expected Start] = null or [Planned Start] = null then null
+        else if [Expected Start] > [Planned Start] then "Delayed"
+        else "On-Time"
+    ),
+
+    // Add task delay status
+    AddTaskDelay = Table.AddColumn(AddProjectDelay, "Task Delay Status", each 
+        if [Expected Start] = null then null
+        else if [Expected Start] > Date.From(DateTime.FixedLocalNow()) and [Actual Start] = null then "On Time"
+        else if [Actual Start] > [Expected Start] then "Delayed"
+        else "On-Time"
+    ),
+
+    // Final column order
+    FinalOrder = Table.ReorderColumns(AddTaskDelay, {
+        "Functional Area", "Object Group", "Entity", "Object Name#(lf)(Each will be a file)", 
+        "Sub-Object Name", "BPM", "IT Solution Manager", "Business Validator", "Task", 
+        "Planned Start", "Planned End", "Expected Start", "Expected End", 
+        "Actual Start", "Actual End", "Status", "Task Delay Status", "Project Delay Status", "Comments"
+    }),
+
+    // Final filter to remove rows without Planned Start
+    FinalFiltered = Table.SelectRows(FinalOrder, each [Planned Start] <> null)
+
+in
+    FinalFiltered
