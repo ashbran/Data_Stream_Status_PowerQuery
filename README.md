@@ -11,7 +11,7 @@ Outputs a clean, grouped table for reporting or dashboard use
 
 ## File Structure
 /PowerQuery/
-├── Apollo_MDM_TaskPipeline_v1.1.m   # Latest version of the M code
+├── TaskPipeline_v1.1.m   # Latest version of the M code
 ├── CHANGELOG.md                     # Version history and updates
 └── README.md                        # Project documentation
 
